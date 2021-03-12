@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">nanodetncnn</string>
+    <string-array name="model_array">
+        <item>m</item>
+        <item>m-416</item>
+        <item>g</item>
+        <item>ELite0_320</item>
+        <item>ELite1_416</item>
+        <item>ELite2_512</item>
+        <item>RepVGG-A0_416</item>
+    </string-array>
+    <string-array name="cpugpu_array">
+        <item>CPU</item>
+        <item>GPU</item>
+    </string-array>
+</resources>
