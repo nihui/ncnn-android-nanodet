@@ -299,7 +299,7 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_loadModel(JN
         "RepVGG-A0_416"
     };
 
-    int target_sizes[] =
+    const int target_sizes[] =
     {
         320,
         416,
@@ -308,6 +308,28 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_loadModel(JN
         416,
         512,
         416
+    };
+
+    const float mean_vals[][3] =
+    {
+        {103.53f, 116.28f, 123.675f},
+        {103.53f, 116.28f, 123.675f},
+        {103.53f, 116.28f, 123.675f},
+        {127.f, 127.f, 127.f},
+        {127.f, 127.f, 127.f},
+        {127.f, 127.f, 127.f},
+        {103.53f, 116.28f, 123.675f}
+    };
+
+    const float norm_vals[][3] =
+    {
+        {1.f / 57.375f, 1.f / 57.12f, 1.f / 58.395f},
+        {1.f / 57.375f, 1.f / 57.12f, 1.f / 58.395f},
+        {1.f / 57.375f, 1.f / 57.12f, 1.f / 58.395f},
+        {1.f / 128.f, 1.f / 128.f, 1.f / 128.f},
+        {1.f / 128.f, 1.f / 128.f, 1.f / 128.f},
+        {1.f / 128.f, 1.f / 128.f, 1.f / 128.f},
+        {1.f / 57.375f, 1.f / 57.12f, 1.f / 58.395f}
     };
 
     const char* modeltype = modeltypes[(int)modelid];
@@ -328,7 +350,7 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_loadModel(JN
         {
             if (!g_nanodet)
                 g_nanodet = new NanoDet;
-            g_nanodet->load(mgr, modeltype, target_size, use_gpu);
+            g_nanodet->load(mgr, modeltype, target_size, mean_vals[(int)modelid], norm_vals[(int)modelid], use_gpu);
         }
     }
 

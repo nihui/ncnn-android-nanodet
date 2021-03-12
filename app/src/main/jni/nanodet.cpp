@@ -209,7 +209,7 @@ NanoDet::NanoDet()
     workspace_pool_allocator.set_size_compare_ratio(0.f);
 }
 
-int NanoDet::load(const char* modeltype, int _target_size, bool use_gpu)
+int NanoDet::load(const char* modeltype, int _target_size, const float* _mean_vals, const float* _norm_vals, bool use_gpu)
 {
     nanodet.clear();
     blob_pool_allocator.clear();
@@ -237,11 +237,17 @@ int NanoDet::load(const char* modeltype, int _target_size, bool use_gpu)
     nanodet.load_model(modelpath);
 
     target_size = _target_size;
+    mean_vals[0] = _mean_vals[0];
+    mean_vals[1] = _mean_vals[1];
+    mean_vals[2] = _mean_vals[2];
+    norm_vals[0] = _norm_vals[0];
+    norm_vals[1] = _norm_vals[1];
+    norm_vals[2] = _norm_vals[2];
 
     return 0;
 }
 
-int NanoDet::load(AAssetManager* mgr, const char* modeltype, int _target_size, bool use_gpu)
+int NanoDet::load(AAssetManager* mgr, const char* modeltype, int _target_size, const float* _mean_vals, const float* _norm_vals, bool use_gpu)
 {
     nanodet.clear();
     blob_pool_allocator.clear();
@@ -269,6 +275,12 @@ int NanoDet::load(AAssetManager* mgr, const char* modeltype, int _target_size, b
     nanodet.load_model(mgr, modelpath);
 
     target_size = _target_size;
+    mean_vals[0] = _mean_vals[0];
+    mean_vals[1] = _mean_vals[1];
+    mean_vals[2] = _mean_vals[2];
+    norm_vals[0] = _norm_vals[0];
+    norm_vals[1] = _norm_vals[1];
+    norm_vals[2] = _norm_vals[2];
 
     return 0;
 }
@@ -303,8 +315,6 @@ int NanoDet::detect(const cv::Mat& rgb, std::vector<Object>& objects, float prob
     ncnn::Mat in_pad;
     ncnn::copy_make_border(in, in_pad, hpad / 2, hpad - hpad / 2, wpad / 2, wpad - wpad / 2, ncnn::BORDER_CONSTANT, 0.f);
 
-    const float mean_vals[3] = {103.53f, 116.28f, 123.675f};
-    const float norm_vals[3] = {0.017429f, 0.017507f, 0.017125f};
     in_pad.substract_mean_normalize(mean_vals, norm_vals);
 
     ncnn::Extractor ex = nanodet.create_extractor();
