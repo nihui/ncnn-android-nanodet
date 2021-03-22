@@ -382,29 +382,31 @@ void NdkCamera::on_image(const unsigned char* nv21, int nv21_width, int nv21_hei
     int w = 0;
     int h = 0;
     int rotate_type = 0;
-    if (camera_orientation == 0)
     {
-        w = nv21_width;
-        h = nv21_height;
-        rotate_type = camera_facing == 0 ? 2 : 1;
-    }
-    if (camera_orientation == 90)
-    {
-        w = nv21_height;
-        h = nv21_width;
-        rotate_type = camera_facing == 0 ? 5 : 6;
-    }
-    if (camera_orientation == 180)
-    {
-        w = nv21_width;
-        h = nv21_height;
-        rotate_type = camera_facing == 0 ? 4 : 3;
-    }
-    if (camera_orientation == 270)
-    {
-        w = nv21_height;
-        h = nv21_width;
-        rotate_type = camera_facing == 0 ? 7 : 8;
+        if (camera_orientation == 0)
+        {
+            w = nv21_width;
+            h = nv21_height;
+            rotate_type = camera_facing == 0 ? 2 : 1;
+        }
+        if (camera_orientation == 90)
+        {
+            w = nv21_height;
+            h = nv21_width;
+            rotate_type = camera_facing == 0 ? 5 : 6;
+        }
+        if (camera_orientation == 180)
+        {
+            w = nv21_width;
+            h = nv21_height;
+            rotate_type = camera_facing == 0 ? 4 : 3;
+        }
+        if (camera_orientation == 270)
+        {
+            w = nv21_height;
+            h = nv21_width;
+            rotate_type = camera_facing == 0 ? 7 : 8;
+        }
     }
 
     cv::Mat nv21_rotated(h + h / 2, w, CV_8UC1);
@@ -415,4 +417,355 @@ void NdkCamera::on_image(const unsigned char* nv21, int nv21_width, int nv21_hei
     ncnn::yuv420sp2rgb(nv21_rotated.data, w, h, rgb.data);
 
     on_image(rgb);
+}
+
+static const int NDKCAMERAWINDOW_ID = 233;
+
+NdkCameraWindow::NdkCameraWindow() : NdkCamera()
+{
+    sensor_manager = 0;
+    sensor_event_queue = 0;
+    accelerometer_sensor = 0;
+    win = 0;
+
+    accelerometer_orientation = 0;
+
+    // sensor
+    sensor_manager = ASensorManager_getInstance();
+
+    accelerometer_sensor = ASensorManager_getDefaultSensor(sensor_manager, ASENSOR_TYPE_ACCELEROMETER);
+}
+
+NdkCameraWindow::~NdkCameraWindow()
+{
+    if (accelerometer_sensor)
+    {
+        ASensorEventQueue_disableSensor(sensor_event_queue, accelerometer_sensor);
+        accelerometer_sensor = 0;
+    }
+
+    if (sensor_event_queue)
+    {
+        ASensorManager_destroyEventQueue(sensor_manager, sensor_event_queue);
+        sensor_event_queue = 0;
+    }
+
+    if (win)
+    {
+        ANativeWindow_release(win);
+    }
+}
+
+void NdkCameraWindow::set_window(ANativeWindow* _win)
+{
+    if (win)
+    {
+        ANativeWindow_release(win);
+    }
+
+    win = _win;
+    ANativeWindow_acquire(win);
+}
+
+void NdkCameraWindow::on_image_render(cv::Mat& rgb) const
+{
+}
+
+void NdkCameraWindow::on_image(const unsigned char* nv21, int nv21_width, int nv21_height) const
+{
+    // resolve orientation from camera_orientation and accelerometer_sensor
+    {
+        if (!sensor_event_queue)
+        {
+            sensor_event_queue = ASensorManager_createEventQueue(sensor_manager, ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS), NDKCAMERAWINDOW_ID, 0, 0);
+
+            ASensorEventQueue_enableSensor(sensor_event_queue, accelerometer_sensor);
+        }
+
+        int id = ALooper_pollAll(0, 0, 0, 0);
+        if (id == NDKCAMERAWINDOW_ID)
+        {
+            ASensorEvent e[8];
+            ssize_t num_event = 0;
+            while (ASensorEventQueue_hasEvents(sensor_event_queue) == 1)
+            {
+                num_event = ASensorEventQueue_getEvents(sensor_event_queue, e, 8);
+                if (num_event < 0)
+                    break;
+            }
+
+            if (num_event > 0)
+            {
+                float acceleration_x = e[num_event - 1].acceleration.x;
+                float acceleration_y = e[num_event - 1].acceleration.y;
+                float acceleration_z = e[num_event - 1].acceleration.z;
+//                 __android_log_print(ANDROID_LOG_WARN, "NdkCameraWindow", "x = %f, y = %f, z = %f", x, y, z);
+
+                if (acceleration_y > 7)
+                {
+                    accelerometer_orientation = 0;
+                }
+                if (acceleration_x < -7)
+                {
+                    accelerometer_orientation = 90;
+                }
+                if (acceleration_y < -7)
+                {
+                    accelerometer_orientation = 180;
+                }
+                if (acceleration_x > 7)
+                {
+                    accelerometer_orientation = 270;
+                }
+            }
+        }
+    }
+
+    // roi crop and rotate nv21
+    int nv21_roi_x = 0;
+    int nv21_roi_y = 0;
+    int nv21_roi_w = 0;
+    int nv21_roi_h = 0;
+    int roi_x = 0;
+    int roi_y = 0;
+    int roi_w = 0;
+    int roi_h = 0;
+    int rotate_type = 0;
+    int render_w = 0;
+    int render_h = 0;
+    int render_rotate_type = 0;
+    {
+        int win_w = ANativeWindow_getWidth(win);
+        int win_h = ANativeWindow_getHeight(win);
+
+        if (accelerometer_orientation == 90 || accelerometer_orientation == 270)
+        {
+            std::swap(win_w, win_h);
+        }
+
+        const int final_orientation = (camera_orientation + accelerometer_orientation) % 360;
+
+        if (final_orientation == 0 || final_orientation == 180)
+        {
+            if (win_w * nv21_height > win_h * nv21_width)
+            {
+                roi_w = nv21_width;
+                roi_h = (nv21_width * win_h / win_w) / 2 * 2;
+                roi_x = 0;
+                roi_y = ((nv21_height - roi_h) / 2) / 2 * 2;
+            }
+            else
+            {
+                roi_h = nv21_height;
+                roi_w = (nv21_height * win_w / win_h) / 2 * 2;
+                roi_x = ((nv21_width - roi_w) / 2) / 2 * 2;
+                roi_y = 0;
+            }
+
+            nv21_roi_x = roi_x;
+            nv21_roi_y = roi_y;
+            nv21_roi_w = roi_w;
+            nv21_roi_h = roi_h;
+        }
+        if (final_orientation == 90 || final_orientation == 270)
+        {
+            if (win_w * nv21_width > win_h * nv21_height)
+            {
+                roi_w = nv21_height;
+                roi_h = (nv21_height * win_h / win_w) / 2 * 2;
+                roi_x = 0;
+                roi_y = ((nv21_width - roi_h) / 2) / 2 * 2;
+            }
+            else
+            {
+                roi_h = nv21_width;
+                roi_w = (nv21_width * win_w / win_h) / 2 * 2;
+                roi_x = ((nv21_height - roi_w) / 2) / 2 * 2;
+                roi_y = 0;
+            }
+
+            nv21_roi_x = roi_y;
+            nv21_roi_y = roi_x;
+            nv21_roi_w = roi_h;
+            nv21_roi_h = roi_w;
+        }
+
+        if (camera_facing == 0)
+        {
+            if (camera_orientation == 0 && accelerometer_orientation == 0)
+            {
+                rotate_type = 2;
+            }
+            if (camera_orientation == 0 && accelerometer_orientation == 90)
+            {
+                rotate_type = 7;
+            }
+            if (camera_orientation == 0 && accelerometer_orientation == 180)
+            {
+                rotate_type = 4;
+            }
+            if (camera_orientation == 0 && accelerometer_orientation == 270)
+            {
+                rotate_type = 5;
+            }
+            if (camera_orientation == 90 && accelerometer_orientation == 0)
+            {
+                rotate_type = 5;
+            }
+            if (camera_orientation == 90 && accelerometer_orientation == 90)
+            {
+                rotate_type = 2;
+            }
+            if (camera_orientation == 90 && accelerometer_orientation == 180)
+            {
+                rotate_type = 7;
+            }
+            if (camera_orientation == 90 && accelerometer_orientation == 270)
+            {
+                rotate_type = 4;
+            }
+            if (camera_orientation == 180 && accelerometer_orientation == 0)
+            {
+                rotate_type = 4;
+            }
+            if (camera_orientation == 180 && accelerometer_orientation == 90)
+            {
+                rotate_type = 5;
+            }
+            if (camera_orientation == 180 && accelerometer_orientation == 180)
+            {
+                rotate_type = 2;
+            }
+            if (camera_orientation == 180 && accelerometer_orientation == 270)
+            {
+                rotate_type = 7;
+            }
+            if (camera_orientation == 270 && accelerometer_orientation == 0)
+            {
+                rotate_type = 7;
+            }
+            if (camera_orientation == 270 && accelerometer_orientation == 90)
+            {
+                rotate_type = 4;
+            }
+            if (camera_orientation == 270 && accelerometer_orientation == 180)
+            {
+                rotate_type = 5;
+            }
+            if (camera_orientation == 270 && accelerometer_orientation == 270)
+            {
+                rotate_type = 2;
+            }
+        }
+        else
+        {
+            if (final_orientation == 0)
+            {
+                rotate_type = 1;
+            }
+            if (final_orientation == 90)
+            {
+                rotate_type = 6;
+            }
+            if (final_orientation == 180)
+            {
+                rotate_type = 3;
+            }
+            if (final_orientation == 270)
+            {
+                rotate_type = 8;
+            }
+        }
+
+        if (accelerometer_orientation == 0)
+        {
+            render_w = roi_w;
+            render_h = roi_h;
+            render_rotate_type = 1;
+        }
+        if (accelerometer_orientation == 90)
+        {
+            render_w = roi_h;
+            render_h = roi_w;
+            render_rotate_type = 8;
+        }
+        if (accelerometer_orientation == 180)
+        {
+            render_w = roi_w;
+            render_h = roi_h;
+            render_rotate_type = 3;
+        }
+        if (accelerometer_orientation == 270)
+        {
+            render_w = roi_h;
+            render_h = roi_w;
+            render_rotate_type = 6;
+        }
+    }
+
+    // crop and rotate nv21
+    cv::Mat nv21_croprotated(roi_h + roi_h / 2, roi_w, CV_8UC1);
+    {
+        const unsigned char* srcY = nv21 + nv21_roi_y * nv21_width + nv21_roi_x;
+        unsigned char* dstY = nv21_croprotated.data;
+        ncnn::kanna_rotate_c1(srcY, nv21_roi_w, nv21_roi_h, nv21_width, dstY, roi_w, roi_h, roi_w, rotate_type);
+
+        const unsigned char* srcUV = nv21 + nv21_width * nv21_height + nv21_roi_y * nv21_width / 2 + nv21_roi_x;
+        unsigned char* dstUV = nv21_croprotated.data + roi_w * roi_h;
+        ncnn::kanna_rotate_c2(srcUV, nv21_roi_w / 2, nv21_roi_h / 2, nv21_width, dstUV, roi_w / 2, roi_h / 2, roi_w, rotate_type);
+    }
+
+    // nv21_croprotated to rgb
+    cv::Mat rgb(roi_h, roi_w, CV_8UC3);
+    ncnn::yuv420sp2rgb(nv21_croprotated.data, roi_w, roi_h, rgb.data);
+
+    on_image_render(rgb);
+
+    // rotate to native window orientation
+    cv::Mat rgb_render(render_h, render_w, CV_8UC3);
+    ncnn::kanna_rotate_c3(rgb.data, roi_w, roi_h, rgb_render.data, render_w, render_h, render_rotate_type);
+
+    ANativeWindow_setBuffersGeometry(win, render_w, render_h, AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM);
+
+    ANativeWindow_Buffer buf;
+    ANativeWindow_lock(win, &buf, NULL);
+
+    // scale to target size
+    if (buf.format == AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM || buf.format == AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM)
+    {
+        for (int y = 0; y < render_h; y++)
+        {
+            const unsigned char* ptr = rgb_render.ptr<const unsigned char>(y);
+            unsigned char* outptr = (unsigned char*)buf.bits + buf.stride * 4 * y;
+
+            int x = 0;
+#if __ARM_NEON
+            for (; x + 7 < render_w; x += 8)
+            {
+                uint8x8x3_t _rgb = vld3_u8(ptr);
+                uint8x8x4_t _rgba;
+                _rgba.val[0] = _rgb.val[0];
+                _rgba.val[1] = _rgb.val[1];
+                _rgba.val[2] = _rgb.val[2];
+                _rgba.val[3] = vdup_n_u8(255);
+                vst4_u8(outptr, _rgba);
+
+                ptr += 24;
+                outptr += 32;
+            }
+#endif // __ARM_NEON
+            for (; x < render_w; x++)
+            {
+                outptr[0] = ptr[0];
+                outptr[1] = ptr[1];
+                outptr[2] = ptr[2];
+                outptr[3] = 255;
+
+                ptr += 3;
+                outptr += 4;
+            }
+        }
+    }
+
+    ANativeWindow_unlockAndPost(win);
 }

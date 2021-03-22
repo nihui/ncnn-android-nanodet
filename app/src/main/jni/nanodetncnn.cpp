@@ -113,75 +113,14 @@ static int draw_fps(cv::Mat& rgb)
 static NanoDet* g_nanodet = 0;
 static ncnn::Mutex lock;
 
-class MyNdkCamera : public NdkCamera
+class MyNdkCamera : public NdkCameraWindow
 {
 public:
-    MyNdkCamera();
-    ~MyNdkCamera();
-    void set_window(ANativeWindow* win);
-    virtual void on_image(const cv::Mat& rgb) const;
-
-private:
-    ANativeWindow* win;
+    virtual void on_image_render(cv::Mat& rgb) const;
 };
 
-MyNdkCamera::MyNdkCamera()
+void MyNdkCamera::on_image_render(cv::Mat& rgb) const
 {
-    win = 0;
-}
-
-MyNdkCamera::~MyNdkCamera()
-{
-    if (win)
-    {
-        ANativeWindow_release(win);
-    }
-}
-
-void MyNdkCamera::set_window(ANativeWindow* _win)
-{
-    if (win)
-    {
-        ANativeWindow_release(win);
-    }
-
-    win = _win;
-    ANativeWindow_acquire(win);
-}
-
-void MyNdkCamera::on_image(const cv::Mat& rgb) const
-{
-    // render to window
-    int target_width = ANativeWindow_getWidth(win);
-    int target_height = ANativeWindow_getHeight(win);
-//     int target_format = ANativeWindow_getFormat(win);
-
-    // crop to target aspect ratio
-    cv::Mat rgb_roi;
-    {
-        int w = rgb.cols;
-        int h = rgb.rows;
-
-        cv::Rect roi;
-
-        if (target_width * h > target_height * w)
-        {
-            roi.width = w;
-            roi.height = w * target_height / target_width;
-            roi.x = 0;
-            roi.y = (h - roi.height) / 2;
-        }
-        else
-        {
-            roi.height = h;
-            roi.width = h * target_width / target_height;
-            roi.x = (w - roi.width) / 2;
-            roi.y = 0;
-        }
-
-        rgb_roi = rgb(roi).clone();
-    }
-
     // nanodet
     {
         ncnn::MutexLockGuard g(lock);
@@ -189,63 +128,17 @@ void MyNdkCamera::on_image(const cv::Mat& rgb) const
         if (g_nanodet)
         {
             std::vector<Object> objects;
-            g_nanodet->detect(rgb_roi, objects);
+            g_nanodet->detect(rgb, objects);
 
-            g_nanodet->draw(rgb_roi, objects);
+            g_nanodet->draw(rgb, objects);
         }
         else
         {
-            draw_unsupported(rgb_roi);
+            draw_unsupported(rgb);
         }
     }
 
-    draw_fps(rgb_roi);
-
-    ANativeWindow_setBuffersGeometry(win, rgb_roi.cols, rgb_roi.rows, AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM);
-
-    ANativeWindow_Buffer buf;
-    ANativeWindow_lock(win, &buf, NULL);
-
-//     __android_log_print(ANDROID_LOG_WARN, "ncnn", "on_image %d %d -> %d %d -> %d %d -> %d %d %d", rgb.cols, rgb.rows, target_width, target_height, rgb_roi.cols, rgb_roi.rows, buf.width, buf.height, buf.stride);
-
-    // scale to target size
-    if (buf.format == AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM || buf.format == AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM)
-    {
-        for (int y = 0; y < rgb_roi.rows; y++)
-        {
-            const unsigned char* ptr = rgb_roi.ptr<const unsigned char>(y);
-            unsigned char* outptr = (unsigned char*)buf.bits + buf.stride * 4 * y;
-
-            int x = 0;
-#if __ARM_NEON
-            for (; x + 7 < rgb_roi.cols; x += 8)
-            {
-                uint8x8x3_t _rgb = vld3_u8(ptr);
-                uint8x8x4_t _rgba;
-                _rgba.val[0] = _rgb.val[0];
-                _rgba.val[1] = _rgb.val[1];
-                _rgba.val[2] = _rgb.val[2];
-                _rgba.val[3] = vdup_n_u8(255);
-                vst4_u8(outptr, _rgba);
-
-                ptr += 24;
-                outptr += 32;
-            }
-#endif // __ARM_NEON
-            for (; x < rgb_roi.cols; x++)
-            {
-                outptr[0] = ptr[0];
-                outptr[1] = ptr[1];
-                outptr[2] = ptr[2];
-                outptr[3] = 255;
-
-                ptr += 3;
-                outptr += 4;
-            }
-        }
-    }
-
-    ANativeWindow_unlockAndPost(win);
+    draw_fps(rgb);
 }
 
 static MyNdkCamera* g_camera = 0;
