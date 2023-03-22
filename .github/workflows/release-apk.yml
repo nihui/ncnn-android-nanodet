@@ -1,0 +1,60 @@
+name: release-apk
+on: [push]
+# on:
+  # push:
+    # tags:
+      # - '*'
+
+env:
+  NCNN_VERSION: 20230223
+  OPENCV_VERSION: 4.6.0
+  OPENCV_MOBILE_TAG: v16
+
+jobs:
+  release-apk:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: ncnn
+      run: |
+        wget -q https://github.com/Tencent/ncnn/releases/download/${NCNN_VERSION}/ncnn-${NCNN_VERSION}-android-vulkan.zip
+        unzip -q ncnn-${NCNN_VERSION}-android-vulkan.zip -d app/src/main/jni
+
+    - name: opencv-mobile
+      run: |
+        wget -q https://github.com/nihui/opencv-mobile/releases/download/${OPENCV_MOBILE_TAG}/opencv-mobile-${OPENCV_VERSION}-android.zip
+        unzip -q opencv-mobile-${OPENCV_VERSION}-android.zip -d app/src/main/jni
+
+    - name: modify-jni-cmakelists
+      run: |
+        sed -i "s@ncnn-[^-]*-android-vulkan@ncnn-${NCNN_VERSION}-android-vulkan@g" app/src/main/jni/CMakeLists.txt
+        sed -i "s@opencv-mobile-[^-]*-android@opencv-mobile-${OPENCV_VERSION}-android@g" app/src/main/jni/CMakeLists.txt
+
+    - name: build-apk
+      run: |
+        bash ./gradlew assembleRelease --stacktrace
+
+    - name: sign-apk
+      id: signapk
+      run: |
+        UNSIGNED_APK=`find app/build/outputs/apk/release -type f -name "*-release-unsigned.apk" | head -n 1`
+        ALIGNED_APK=${UNSIGNED_APK//-release-unsigned.apk/-release-unsigned-aligned.apk}
+        SIGNED_APK=${UNSIGNED_APK//-release-unsigned.apk/-release.apk}
+        keytool -genkey -noprompt -alias ncnn \
+            -dname "CN=mqttserver.ibm.com, OU=ID, O=IBM, L=Hursley, S=Hants, C=GB"\
+            -keystore ncnn.keystore -storepass 7767517 -keypass 7767517 \
+            -keyalg RSA -keysize 2048 -validity 10000
+        ${ANDROID_HOME}/build-tools/29.0.2/zipalign -f -v 4 ${UNSIGNED_APK} ${SIGNED_APK}
+        ${ANDROID_HOME}/build-tools/29.0.2/apksigner sign --ks ncnn.keystore --ks-key-alias ncnn \
+            --ks-pass pass:7767517 --key-pass pass:7767517 --out ${SIGNED_APK} ${SIGNED_APK}
+        ${ANDROID_HOME}/build-tools/29.0.2/apksigner verify ${SIGNED_APK}
+        echo "SIGNED_APK=${SIGNED_APK}" >> $GITHUB_OUTPUT
+
+    - name: create-release
+      uses: softprops/action-gh-release@v1
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        tag_name: ${{ github.ref }}
+        name: Release ${{ github.ref_name }}
+        files: ${{ steps.signapk.outputs.SIGNED_APK }}
