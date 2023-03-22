@@ -38,9 +38,10 @@ jobs:
     - name: sign-apk
       id: signapk
       run: |
+        SHA_SHORT=`git rev-parse --short HEAD`
         UNSIGNED_APK=`find app/build/outputs/apk/release -type f -name "*-release-unsigned.apk" | head -n 1`
         ALIGNED_APK=${UNSIGNED_APK//-release-unsigned.apk/-release-unsigned-aligned.apk}
-        SIGNED_APK=${UNSIGNED_APK//-release-unsigned.apk/-release.apk}
+        SIGNED_APK=${UNSIGNED_APK//-release-unsigned.apk/-${SHA_SHORT}-release.apk}
         keytool -genkey -noprompt -alias ncnn \
             -dname "CN=mqttserver.ibm.com, OU=ID, O=IBM, L=Hursley, S=Hants, C=GB"\
             -keystore ncnn.keystore -storepass 7767517 -keypass 7767517 \
@@ -50,11 +51,12 @@ jobs:
             --ks-pass pass:7767517 --key-pass pass:7767517 --out ${SIGNED_APK} ${SIGNED_APK}
         ${ANDROID_HOME}/build-tools/29.0.2/apksigner verify ${SIGNED_APK}
         echo "SIGNED_APK=${SIGNED_APK}" >> $GITHUB_OUTPUT
+        echo "SHA_SHORT=${SHA_SHORT}" >> $GITHUB_OUTPUT
 
     - name: create-release
       uses: softprops/action-gh-release@v1
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        tag_name: ${{ github.sha }}
-        name: Release ${{ github.sha }}
+        tag_name: ${{ steps.signapk.outputs.SHA_SHORT }}
+        name: Release ${{ steps.signapk.outputs.SHA_SHORT }}
         files: ${{ steps.signapk.outputs.SIGNED_APK }}
