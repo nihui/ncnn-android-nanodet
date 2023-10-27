@@ -6,9 +6,9 @@ on: [push]
       # - '*'
 
 env:
-  NCNN_VERSION: 20230223
-  OPENCV_VERSION: 4.6.0
-  OPENCV_MOBILE_TAG: v16
+  NCNN_VERSION: 20231027
+  OPENCV_VERSION: 4.8.1
+  OPENCV_MOBILE_TAG: v20
 
 jobs:
   release-apk:
