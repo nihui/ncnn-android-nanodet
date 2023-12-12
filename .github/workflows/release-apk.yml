@@ -8,7 +8,7 @@ on: [push]
 env:
   NCNN_VERSION: 20231027
   OPENCV_VERSION: 4.8.1
-  OPENCV_MOBILE_TAG: v20
+  OPENCV_MOBILE_TAG: v22
 
 jobs:
   release-apk:
