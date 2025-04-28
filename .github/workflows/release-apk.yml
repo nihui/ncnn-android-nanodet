@@ -1,15 +1,11 @@
 name: release-apk
-on: [push]
-# on:
-  # push:
-    # tags:
-      # - '*'
+on: workflow_dispatch
 
 env:
-  NCNN_VERSION: 20241226
-  OPENCV_VERSION: 4.10.0
-  OPENCV_MOBILE_TAG: v31
-  BUILD_TOOLS_VERSION: 33.0.0
+  NCNN_VERSION: 20250427
+  OPENCV_VERSION: 4.11.0
+  OPENCV_MOBILE_TAG: v33
+  BUILD_TOOLS_VERSION: 36.0.0
 
 jobs:
   release-apk:
