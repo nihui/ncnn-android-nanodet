@@ -5,7 +5,7 @@ plugins {
 android {
     namespace 'com.tencent.nanodetncnn'
     compileSdk 33
-    ndkVersion "29.0.14206865"
+    ndkVersion "30.0.16248370"
 
     defaultConfig {
         applicationId "com.tencent.nanodetncnn"
