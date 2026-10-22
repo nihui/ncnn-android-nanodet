@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <condition_variable>
 
 #include <android/log.h>
 #include <android/native_window_jni.h>
@@ -111,6 +112,96 @@ struct NdkCameraApi
 
 static NdkCameraApi camera_api = {};
 
+// Error callbacks only enqueue work. Closing a backend may wait for those callbacks.
+class CameraRecovery
+{
+public:
+    explicit CameraRecovery(NdkCamera* camera)
+        : owner(camera), stopping(false), pending(false), generation(0), retry(false)
+    {
+        started = pthread_create(&thread, 0, thread_entry, this) == 0;
+        if (!started)
+            __android_log_print(ANDROID_LOG_ERROR, "NdkCamera", "Recovery pthread_create failed");
+    }
+
+    ~CameraRecovery()
+    {
+        {
+            std::lock_guard<std::mutex> guard(mutex);
+            stopping = true;
+            condition.notify_one();
+        }
+        if (started) pthread_join(thread, 0);
+    }
+
+    bool is_started() const { return started; }
+
+    void notify(unsigned long long session, bool try_legacy)
+    {
+        std::lock_guard<std::mutex> guard(mutex);
+        if (stopping) return;
+        if (!pending || session > generation)
+        {
+            generation = session;
+            retry = try_legacy;
+        }
+        else if (session == generation)
+        {
+            retry = retry && try_legacy;
+        }
+        pending = true;
+        condition.notify_one();
+    }
+
+private:
+    static void* thread_entry(void* context)
+    {
+        static_cast<CameraRecovery*>(context)->run();
+        return 0;
+    }
+
+    void run()
+    {
+        for (;;)
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            condition.wait(lock, [this] { return stopping || pending; });
+            if (stopping) return;
+            lock.unlock();
+
+            std::lock_guard<std::mutex> guard(owner->camera_mutex);
+            lock.lock();
+            if (stopping) return;
+            const unsigned long long session = generation;
+            const bool try_legacy = retry;
+            pending = false;
+            lock.unlock();
+
+            // A close, switch, or synchronous fallback invalidates earlier errors.
+            if (session != owner->camera_generation || !owner->camera_open) continue;
+            const bool fallback = try_legacy && !owner->legacy_camera;
+            owner->close_locked();
+            __android_log_print(ANDROID_LOG_INFO, "NdkCamera", "Camera closed after asynchronous error");
+            if (fallback && (!owner->camera_managed || (owner->camera_active
+                && owner->camera_permission && owner->camera_output_ready)))
+            {
+                __android_log_print(ANDROID_LOG_INFO, "NdkCamera", "NDK device error; trying Camera1 once");
+                owner->open_legacy();
+            }
+        }
+    }
+
+    NdkCamera* owner;
+    pthread_t thread;
+    bool started;
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool stopping;
+    bool pending;
+    unsigned long long generation;
+    bool retry;
+};
+
 // Camera1 is a public Java API. Drive it from a native, JVM-attached Looper thread.
 // Never call open/close from an image callback; close joins the capture thread.
 class LegacyCamera
@@ -131,6 +222,7 @@ private:
     static void JNICALL error(JNIEnv* env, jobject callback, jint code, jobject camera);
 
     NdkCamera* owner;
+    unsigned long long generation;
     pthread_t thread;
     pthread_mutex_t ready_mutex;
     pthread_cond_t ready_condition;
@@ -211,7 +303,7 @@ void LegacyCamera::uninitialize(JNIEnv* env)
 }
 
 LegacyCamera::LegacyCamera(NdkCamera* camera)
-    : owner(camera), thread_started(false), ready(false), open_status(-1), looper(0), quit(0), add_buffer(0), width(0), height(0), borrowed_frames(0), copied_frames(0)
+    : owner(camera), generation(camera->camera_generation), thread_started(false), ready(false), open_status(-1), looper(0), quit(0), add_buffer(0), width(0), height(0), borrowed_frames(0), copied_frames(0)
 {
     pthread_mutex_init(&ready_mutex, 0);
     pthread_cond_init(&ready_condition, 0);
@@ -418,6 +510,9 @@ cleanup:
         signal_ready(-1);
     }
     __android_log_print(ANDROID_LOG_INFO, "NdkCamera", "Camera1 closed borrowed=%u copied=%u", borrowed_frames, copied_frames);
+    // Also report an unexpected Looper exit or a failed preview callback.
+    // Normal close has already invalidated this generation before joining us.
+    if (started) owner->recovery->notify(generation, false);
     // All thread-local JNI references are released when detaching.
     java_vm->DetachCurrentThread();
 }
@@ -475,14 +570,19 @@ void JNICALL LegacyCamera::error(JNIEnv* env, jobject callback, jint code, jobje
     cleanup_call(env, self->looper, self->quit);
 }
 
-static void onDisconnected(void* context, ACameraDevice* device)
+void NdkCamera::onDisconnected(void* context, ACameraDevice* device)
 {
     __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "onDisconnected %p", device);
+    DeviceCallbackContext* callback = static_cast<DeviceCallbackContext*>(context);
+    callback->camera->recovery->notify(callback->generation, false);
 }
 
-static void onError(void* context, ACameraDevice* device, int error)
+void NdkCamera::onError(void* context, ACameraDevice* device, int error)
 {
     __android_log_print(ANDROID_LOG_WARN, "NdkCamera", "onError %p %d", device, error);
+    DeviceCallbackContext* callback = static_cast<DeviceCallbackContext*>(context);
+    // Occupancy, policy, disconnection and service failures need external recovery.
+    callback->camera->recovery->notify(callback->generation, error == ERROR_CAMERA_DEVICE);
 }
 
 void NdkCamera::onImageAvailable(void* context, AImageReader* reader)
@@ -659,11 +759,14 @@ NdkCamera::NdkCamera()
     capture_session_output_container = 0;
     capture_session_output = 0;
     capture_session = 0;
+    camera_generation = 0;
+    recovery = new CameraRecovery(this);
 }
 
 NdkCamera::~NdkCamera()
 {
     close();
+    delete recovery;
 }
 
 int NdkCamera::open(int facing)
@@ -676,10 +779,15 @@ int NdkCamera::open(int facing)
 int NdkCamera::switch_camera()
 {
     std::lock_guard<std::mutex> guard(camera_mutex);
-    if (camera_managed && !camera_open) return -1;
     const int old_facing = camera_facing;
+    const bool was_open = camera_open;
+    if (camera_managed && (!camera_active || !camera_permission || !camera_output_ready))
+    {
+        camera_facing = 1 - old_facing;
+        return 0;
+    }
     if (open_locked(1 - old_facing) == 0) return 0;
-    open_locked(old_facing);
+    if (was_open) open_locked(old_facing);
     return -1;
 }
 
@@ -688,6 +796,7 @@ int NdkCamera::open_locked(int facing)
     close_locked();
     camera_facing = facing;
     camera_orientation = 0;
+    if (!recovery->is_started()) return -1;
     if (open_ndk() == 0)
     {
         camera_open = true;
@@ -695,6 +804,12 @@ int NdkCamera::open_locked(int facing)
     }
     close_ndk();
     __android_log_print(ANDROID_LOG_INFO, "NdkCamera", "NDK unavailable for facing=%d; trying Camera1", facing);
+    return open_legacy();
+}
+
+int NdkCamera::open_legacy()
+{
+    ++camera_generation;
     legacy_camera = new LegacyCamera(this);
     if (legacy_camera->open() == 0)
     {
@@ -789,8 +904,10 @@ int NdkCamera::open_ndk()
 
     // open camera
     {
-        ACameraDevice_StateCallbacks camera_device_state_callbacks;
-        camera_device_state_callbacks.context = this;
+        device_callback_context.camera = this;
+        device_callback_context.generation = camera_generation;
+        ACameraDevice_StateCallbacks camera_device_state_callbacks = {};
+        camera_device_state_callbacks.context = &device_callback_context;
         camera_device_state_callbacks.onDisconnected = onDisconnected;
         camera_device_state_callbacks.onError = onError;
 
@@ -852,6 +969,7 @@ void NdkCamera::close()
 
 void NdkCamera::close_locked()
 {
+    ++camera_generation;
     delete legacy_camera;
     legacy_camera = 0;
     close_ndk();

@@ -29,6 +29,7 @@
 #include <opencv2/core/core.hpp>
 
 class LegacyCamera;
+class CameraRecovery;
 
 class NdkCamera
 {
@@ -62,13 +63,25 @@ protected:
     int set_output_ready(bool ready);
 
 private:
+    friend class LegacyCamera;
+    friend class CameraRecovery;
     int update_camera();
     int open_locked(int facing);
     int open_ndk();
+    int open_legacy();
     void close_locked();
     void close_ndk();
+    static void onDisconnected(void* context, ACameraDevice* device);
+    static void onError(void* context, ACameraDevice* device, int error);
     static void onImageAvailable(void* context, AImageReader* reader);
 
+    struct DeviceCallbackContext
+    {
+        NdkCamera* camera;
+        unsigned long long generation;
+    } device_callback_context;
+    CameraRecovery* recovery;
+    unsigned long long camera_generation;
     std::mutex camera_mutex;
     bool camera_managed;
     bool camera_active;
