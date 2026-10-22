@@ -37,7 +37,6 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback
     public static final int REQUEST_CAMERA = 100;
 
     private NanoDetNcnn nanodetncnn = new NanoDetNcnn();
-    private int facing = 0;
 
     private Spinner spinnerModel;
     private Spinner spinnerCPUGPU;
@@ -65,13 +64,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback
             @Override
             public void onClick(View arg0) {
 
-                int new_facing = 1 - facing;
-
-                nanodetncnn.closeCamera();
-
-                nanodetncnn.openCamera(new_facing);
-
-                facing = new_facing;
+                nanodetncnn.switchCamera();
             }
         });
 
@@ -112,6 +105,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback
         });
 
         reload();
+
+        // Request once per Activity, so denial cannot loop through onResume.
+        if (ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED)
+            ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.CAMERA}, REQUEST_CAMERA);
     }
 
     private void reload()
@@ -137,6 +134,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback
     @Override
     public void surfaceDestroyed(SurfaceHolder holder)
     {
+        nanodetncnn.setOutputWindow(null);
     }
 
     @Override
@@ -144,19 +142,22 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback
     {
         super.onResume();
 
-        if (ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.CAMERA) == PackageManager.PERMISSION_DENIED)
-        {
-            ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.CAMERA}, REQUEST_CAMERA);
-        }
+        nanodetncnn.setCameraPermission(ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED);
+        nanodetncnn.setCameraActive(true);
+    }
 
-        nanodetncnn.openCamera(facing);
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults)
+    {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_CAMERA)
+            nanodetncnn.setCameraPermission(ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED);
     }
 
     @Override
     public void onPause()
     {
+        nanodetncnn.setCameraActive(false);
         super.onPause();
-
-        nanodetncnn.closeCamera();
     }
 }
