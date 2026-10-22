@@ -149,6 +149,8 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved)
 {
     __android_log_print(ANDROID_LOG_DEBUG, "ncnn", "JNI_OnLoad");
 
+    if (NdkCamera::initialize(vm) != 0) return JNI_ERR;
+
     g_camera = new MyNdkCamera;
 
     return JNI_VERSION_1_4;
@@ -157,6 +159,8 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved)
 JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved)
 {
     __android_log_print(ANDROID_LOG_DEBUG, "ncnn", "JNI_OnUnload");
+
+    g_camera->close();
 
     {
         ncnn::MutexLockGuard g(lock);
@@ -167,6 +171,7 @@ JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved)
 
     delete g_camera;
     g_camera = 0;
+    NdkCamera::uninitialize(vm);
 }
 
 // public native boolean loadModel(AssetManager mgr, int modelid, int cpugpu);
@@ -253,14 +258,17 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_loadModel(JN
 // public native boolean openCamera(int facing);
 JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_openCamera(JNIEnv* env, jobject thiz, jint facing)
 {
-    if (facing < 0 || facing > 1)
+    if (facing < -1 || facing > 1)
         return JNI_FALSE;
 
     __android_log_print(ANDROID_LOG_DEBUG, "ncnn", "openCamera %d", facing);
 
-    g_camera->open((int)facing);
+    return g_camera->open((int)facing) == 0;
+}
 
-    return JNI_TRUE;
+JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_switchCamera(JNIEnv* env, jobject thiz)
+{
+    return g_camera->switch_camera() == 0;
 }
 
 // public native boolean closeCamera();
@@ -273,16 +281,20 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_closeCamera(
     return JNI_TRUE;
 }
 
+JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_setCameraActive(JNIEnv* env, jobject thiz, jboolean active)
+{
+    return g_camera->set_active(active) == 0;
+}
+
+JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_setCameraPermission(JNIEnv* env, jobject thiz, jboolean granted)
+{
+    return g_camera->set_permission(granted) == 0;
+}
+
 // public native boolean setOutputWindow(Surface surface);
 JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_setOutputWindow(JNIEnv* env, jobject thiz, jobject surface)
 {
-    ANativeWindow* win = ANativeWindow_fromSurface(env, surface);
-
-    __android_log_print(ANDROID_LOG_DEBUG, "ncnn", "setOutputWindow %p", win);
-
-    g_camera->set_window(win);
-
-    return JNI_TRUE;
+    return g_camera->set_surface(env, surface) == 0;
 }
 
 }
