@@ -20,11 +20,13 @@
 
 #include <jni.h>
 
+#include <string.h>
 #include <string>
 #include <vector>
 
 #include <platform.h>
 #include <benchmark.h>
+#include <gpu.h>
 
 #include "nanodet.h"
 
@@ -153,6 +155,8 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved)
 
     g_camera = new MyNdkCamera;
 
+    ncnn::create_gpu_instance();
+
     return JNI_VERSION_1_4;
 }
 
@@ -169,6 +173,8 @@ JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved)
         g_nanodet = 0;
     }
 
+    ncnn::destroy_gpu_instance();
+
     delete g_camera;
     g_camera = 0;
     NdkCamera::uninitialize(vm);
@@ -177,7 +183,7 @@ JNIEXPORT void JNI_OnUnload(JavaVM* vm, void* reserved)
 // public native boolean loadModel(AssetManager mgr, int modelid, int cpugpu);
 JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_loadModel(JNIEnv* env, jobject thiz, jobject assetManager, jint modelid, jint cpugpu)
 {
-    if (modelid < 0 || modelid > 6 || cpugpu < 0 || cpugpu > 1)
+    if (modelid < 0 || modelid > 6 || cpugpu < 0 || cpugpu > 3)
     {
         return JNI_FALSE;
     }
@@ -233,10 +239,68 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_loadModel(JN
     const char* modeltype = modeltypes[(int)modelid];
     int target_size = target_sizes[(int)modelid];
     bool use_gpu = (int)cpugpu == 1;
+    bool use_turnip = (int)cpugpu == 2;
+    bool use_momoten = (int)cpugpu == 3;
 
     // reload
     {
         ncnn::MutexLockGuard g(lock);
+
+        static int old_modelid = -1;
+        static int old_cpugpu = -1;
+        if (modelid != old_modelid || cpugpu != old_cpugpu)
+        {
+            // model or cpugpu changed
+            delete g_nanodet;
+            g_nanodet = 0;
+        }
+        old_modelid = modelid;
+
+        if (cpugpu != old_cpugpu)
+        {
+            // The old Net must be destroyed before switching drivers.
+            ncnn::destroy_gpu_instance();
+            old_cpugpu = -1;
+
+            if (use_momoten)
+            {
+                if (ncnn::create_gpu_instance("libmomoten.so") != 0)
+                {
+                    ncnn::destroy_gpu_instance();
+                    return JNI_FALSE;
+                }
+
+                ncnn::VulkanDevice* vkdev = ncnn::get_gpu_device();
+                if (!vkdev || !vkdev->is_valid()
+                    || (strcmp(vkdev->info.driver_name(), "momoten") != 0 && strncmp(vkdev->info.device_name(), "momoten: ", 9) != 0))
+                {
+                    // simplevk may fall back to another driver.
+                    ncnn::destroy_gpu_instance();
+                    return JNI_FALSE;
+                }
+            }
+            else if (use_turnip)
+            {
+                if (ncnn::create_gpu_instance("libvulkan_freedreno.so") != 0)
+                {
+                    ncnn::destroy_gpu_instance();
+                    return JNI_FALSE;
+                }
+
+                ncnn::VulkanDevice* vkdev = ncnn::get_gpu_device();
+                if (!vkdev || !vkdev->is_valid() || strcmp(vkdev->info.driver_name(), "turnip") != 0)
+                {
+                    // simplevk may fall back to another driver.
+                    ncnn::destroy_gpu_instance();
+                    return JNI_FALSE;
+                }
+            }
+            else if (use_gpu)
+            {
+                ncnn::create_gpu_instance();
+            }
+            old_cpugpu = cpugpu;
+        }
 
         if (use_gpu && ncnn::get_gpu_count() == 0)
         {
@@ -244,11 +308,10 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_nanodetncnn_NanoDetNcnn_loadModel(JN
             delete g_nanodet;
             g_nanodet = 0;
         }
-        else
+        else if (!g_nanodet)
         {
-            if (!g_nanodet)
-                g_nanodet = new NanoDet;
-            g_nanodet->load(mgr, modeltype, target_size, mean_vals[(int)modelid], norm_vals[(int)modelid], use_gpu);
+            g_nanodet = new NanoDet;
+            g_nanodet->load(mgr, modeltype, target_size, mean_vals[(int)modelid], norm_vals[(int)modelid], use_gpu || use_turnip || use_momoten);
         }
     }
 

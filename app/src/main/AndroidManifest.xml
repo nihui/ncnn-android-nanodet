@@ -6,6 +6,12 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application android:label="@string/app_name">
+        <!-- Optional vendor OpenCL libraries used by momoten on Android 12+. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
+        <uses-native-library android:name="libGLES_mali.so" android:required="false" />
+        <uses-native-library android:name="libmali.so" android:required="false" />
+        <uses-native-library android:name="libPVROCL.so" android:required="false" />
         <activity android:name="MainActivity" android:label="@string/app_name" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
